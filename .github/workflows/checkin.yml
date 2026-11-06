@@ -21,13 +21,35 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install httpx[http2,socks]
+          pip install "httpx[http2,socks]"
+
+      - name: 安装并启动 Cloudflare WARP (SOCKS5 代理绕过阿里云 WAF)
+        id: warp
+        continue-on-error: true
+        run: |
+          set -e
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloudflare-warp
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+          sleep 8
+          warp-cli --accept-tos status || true
+          echo "=== 出口 IP ==="
+          curl -s --max-time 20 --socks5-hostname 127.0.0.1:40000 https://api.ipify.org || true
+          echo ""
 
       - name: 执行签到
         env:
-          SOCKS5_PROXY: ${{ secrets.SOCKS5_PROXY }}
+          SOCKS5_PROXY: ${{ steps.warp.outcome == 'success' && 'socks5h://127.0.0.1:40000' || '' }}
           AGENTROUTER_ACCOUNTS: ${{ secrets.AGENTROUTER_ACCOUNTS }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
+          echo "SOCKS5_PROXY=$SOCKS5_PROXY"
           python checkin.py
